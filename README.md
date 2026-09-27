@@ -1,6 +1,6 @@
 # 分支剧情一致性审校台（Branching Story Auditor）
 
-一个用于检查 **分支剧情 / 互动叙事脚本一致性** 的 Web 应用。支持为每个场景设置 **布尔前置条件、进入时状态赋值**，为每个选项设置 **显示条件、状态赋值、跳转目标和正整数权重**，并指定剧情起点。后端会从起点出发，按 **「场景 + 变量状态」组合状态** 进行穷举传播与去重，因此即使剧情包含环路（可反复返回的场景），分析也保证终止。基于同一状态图，还可以对编辑中的草稿做 **结局概率推演**：精确求解各终止场景的最终到达概率，并单独列出永远困在循环中的概率质量；生成 **选项覆盖路线**：用确定性贪心集合覆盖压缩出一组可执行路线，让所有实际可走的选项至少被走一遍；分析 **结局必经抉择**：精确求出每个可达终止场景的全部到达路线共同经过的稳定选项（含环、同场景多状态仍精确终止），并给出必经次序、最短见证路径与绕开反例查询；做 **伏笔回收路线校验**：选择铺垫场景与回收场景后，把「待回收」标记并入状态遍历，找出到达设计结局时伏笔仍未回收的最短违规路线；做 **节奏校验**：勾选高强度场景并设置允许的最长连续场景数（1～10），把「连续高强度计数」并入状态遍历（进非高强度即清零、环路中逐圈累计），找出连续高强度场景超限的最短路线并展示沿途场景、变量状态与连续计数；以及求解 **结局保证到达**：选定目标结局（无选项场景）并指定哪些场景由环境控制后，用最小不动点反向扩展判断是否存在玩家策略，使环境任意选择合法选项都能在有限步内到达目标，成功时给出每个获胜玩家状态的推荐选项与保证层级，失败时给出环境反制见证（非目标死局 / 可无限停留的循环 / 目标不可达）。
+一个用于检查 **分支剧情 / 互动叙事脚本一致性** 的 Web 应用。支持为每个场景设置 **布尔前置条件、进入时状态赋值**，为每个选项设置 **显示条件、状态赋值、跳转目标和正整数权重**，并指定剧情起点。后端会从起点出发，按 **「场景 + 变量状态」组合状态** 进行穷举传播与去重，因此即使剧情包含环路（可反复返回的场景），分析也保证终止。基于同一状态图，还可以对编辑中的草稿做 **结局概率推演**：精确求解各终止场景的最终到达概率，并单独列出永远困在循环中的概率质量；生成 **选项覆盖路线**：用确定性贪心集合覆盖压缩出一组可执行路线，让所有实际可走的选项至少被走一遍；分析 **结局必经抉择**：精确求出每个可达终止场景的全部到达路线共同经过的稳定选项（含环、同场景多状态仍精确终止），并给出必经次序、最短见证路径与绕开反例查询；做 **伏笔回收路线校验**：选择铺垫场景与回收场景后，把「待回收」标记并入状态遍历，找出到达设计结局时伏笔仍未回收的最短违规路线；做 **节奏校验**：勾选高强度场景并设置允许的最长连续场景数（1～10），把「连续高强度计数」并入状态遍历（进非高强度即清零、环路中逐圈累计），找出连续高强度场景超限的最短路线并展示沿途场景、变量状态与连续计数；求解 **结局保证到达**：选定目标结局（无选项场景）并指定哪些场景由环境控制后，用最小不动点反向扩展判断是否存在玩家策略，使环境任意选择合法选项都能在有限步内到达目标，成功时给出每个获胜玩家状态的推荐选项与保证层级，失败时给出环境反制见证（非目标死局 / 可无限停留的循环 / 目标不可达）；以及做 **变量赋值消费审计**：把「每个变量最后由哪处赋值写入」并入状态遍历，逐处检查场景进入赋值与选项赋值写入的值在再次被赋值或路线结束前是否被后续条件引用，为已消费项给出到首次引用的最短可走路线。
 
 ## 能发现什么问题
 
@@ -286,6 +286,21 @@ npm start
 
 响应要点：`guaranteed`（完整探索时为 `true` / `false`；起点受阻或截断时为 `null`）、`status`（`guaranteed` / `unguaranteed` / `start-blocked` / `truncated`）、`start`（起点状态：`sceneId` / `state` 完整变量值 / `controller` / `rank` 保证层级 / `recommend`）、`winningStates[]`（每个获胜玩家状态：场景、变量值、层级、`recommend`：推荐选项 `uid` / `optionIndex` / `text` / `target` / `nextRank`；截断时为 `null`）、`failure`（无法保证时：`reason` 为 `deadend` / `loop` / `unreachable`、`targetReachable`、`deadendScene`、`witnessPath` 场景与选项交替并带控制方与循环标记、`cycleScenes`；成功时为 `null`）、`counts`（`states` / `transitions` / `playerStates` / `envStates` / `targetStates` / `variables`）、`knownVars`、`conditionErrors`、`statesExplored`、`maxStates`、`message`。
 
+## 变量赋值消费审计
+
+编辑页右侧的「变量赋值消费审计」面板回答：**“每一处场景进入赋值和选项赋值写入的变量值，在再次被赋值或路线结束之前，到底有没有被后续条件读过？”**——帮助作者发现“写了却没人读”的死赋值（可删除，或说明遗漏了引用它的条件分支）。
+
+1. 点击「运行审计」，后端对 **编辑中的未保存草稿**（不落盘）沿现有 **场景、变量状态与合法跳转语义** 展开状态图：**选项条件先于本选项赋值**求值（选项自己的赋值不会被自己的条件读到）、**目标场景进入赋值先于其前置条件**求值（场景自己的进入赋值可能被自己的前置条件读到——即使前置条件最终不成立、入口被挡，这次引用也已经发生）；条件不成立、悬空跳转、入口前置不成立的选项不构成边，其赋值不会执行；
+2. **def-use 追踪**：把「每个变量最后由哪处赋值写入」并入遍历去重键——状态键 = `(场景 ID, 每变量最后赋值来源向量)`。由于每处赋值写入的是常量，变量取值位图可由来源向量直接推出；来源向量空间有限，**含任意环路都必然终止**（沿用约 100 万状态安全上限）。每次求值条件时，被引用变量当前的来源赋值即被“消费”一次——再次赋值会“杀死”旧值，路线结束（终止场景 / 死局）前未被引用则该次写入作废；
+3. **存在性规则**：同一赋值位置在不同可达状态下**只要存在一次有效引用即算已消费**；只有完整探索后仍无任何引用，才判定为 **未消费**。条件求值结果不影响引用的成立（条件为 false 时变量也已被读取）；读到从未赋值的变量（初始值）不消费任何赋值；
+4. 结果 **按赋值位置逐项列出**：`已消费`（附 **到首次引用的最短可走路线**——BFS 逐层展开并对每个位置只保留选项步数最短的见证，路线含沿途场景、每步变量状态与引用发生的位置 / 条件原文）、`未消费`（完整探索下确认写入的值从未被读到）、`未执行`（赋值所在场景从未进入或选项从未可走，附原因）；
+5. **截断安全**：状态数超上限被截断时，尚未证实消费的赋值一律标记为 **未知**（`unknown`），**绝不判为未消费**；已证实的消费结论仍然确凿（路线真实可走）；
+6. 审计针对编辑中的草稿；**草稿被继续修改后，旧结果标记为「可能过期」**，重新「运行审计」即可。
+
+**API 校验（返回 400）**：剧情缺少有效起点。起点前置条件不成立时以 `status: 'start-blocked'` 单独提示，不产出逐项结果。
+
+响应要点：`ok` / `status`（`ok` / `truncated` / `start-blocked`）、`truncated`、`assignments[]`（每处赋值：`kind`：`scene` 或 `option`、`sceneId` / `sceneTitle`、选项类另带 `optionIndex` / `optionUid` / `optionText`、`assignIndex`、`variable` / `value`、`label` 位置说明、`reachable`、`status`：`consumed` / `unconsumed` / `unknown` / `unreachable`、`reason`（未执行原因）、`reference`（已消费时：`variable` / `depth` 选项步数 / `reader`：引用者（`kind`：`option-condition` 或 `scene-precondition`，含场景、选项序号与条件原文）/ `path` 场景与选项交替并带每步状态 / `stateAtRead` 引用时的完整变量值））、`summary`（`total` / `reachable` / `consumed` / `unconsumed` / `unknown` / `unreachable`）、`counts`、`knownVars`、`conditionErrors`、`statesExplored`、`maxStates`、`message`。
+
 ## HTTP API
 
 | 方法 | 路径 | 说明 |
@@ -315,6 +330,8 @@ npm start
 | `POST` | `/api/stories/:id/pacing` | 对已保存剧情做节奏校验，请求体即 `query` 或 `{ query }` |
 | `POST` | `/api/strategy` | 结局保证到达（玩家策略求解）：对请求体中的草稿剧情直接求解（不落盘），请求体 `{ story, query: { targetScene, environmentScenes } }`（可注入测试用 `maxStates`）；目标含选项 / 场景不存在等返回 400 |
 | `POST` | `/api/stories/:id/strategy` | 对已保存剧情求解结局保证到达，请求体即 `query` 或 `{ query }` |
+| `POST` | `/api/assign-audit` | 变量赋值消费审计：对请求体中的草稿剧情直接审计（不落盘），请求体即剧情或 `{ story }`（可注入测试用 `maxStates`）；缺少有效起点返回 400 |
+| `GET` | `/api/stories/:id/assign-audit` | 对已保存剧情做变量赋值消费审计 |
 | `POST` | `/api/stories/:id/baseline` | 把请求体中的剧情分析结果保存为基线（同时落盘剧情），返回 `{ story, baseline, analysis }` |
 | `POST` | `/api/stories/:id/baseline/compare` | 基线对比；请求体可省略（对比已保存剧情）或传入编辑中的草稿，返回 `{ summary, items }` |
 | `DELETE` | `/api/stories/:id/baseline` | 删除基线（剧情内容不变） |
@@ -357,7 +374,7 @@ npm start
 
 ```
 .
-├── server.js              # Express 入口与 REST API（含基线、目标路径查询、结局概率推演、结局必经抉择、选项覆盖路线与逐步回放、伏笔回收路线校验、节奏校验、结局保证到达接口）
+├── server.js              # Express 入口与 REST API（含基线、目标路径查询、结局概率推演、结局必经抉择、选项覆盖路线与逐步回放、伏笔回收路线校验、节奏校验、结局保证到达、变量赋值消费审计接口）
 ├── src/
 │   ├── expression.js      # 布尔表达式递归下降解析器 / 求值 / 失败解释
 │   ├── analyzer.js        # 「场景+状态」BFS 传播去重分析引擎（附带问题指纹）
@@ -369,6 +386,7 @@ npm start
 │   ├── foreshadow.js      # 伏笔回收路线校验：待回收标记并入状态遍历，求最短违规路线
 │   ├── pacing.js          # 节奏校验：连续高强度计数并入状态遍历（进非高强度清零、环上累计），求最短超限路线
 │   ├── strategy.js        # 结局保证到达：最小不动点反向扩展求玩家必胜策略（推荐选项与层级）/ 环境反制见证
+│   ├── assignaudit.js     # 变量赋值消费审计：每变量最后赋值来源并入状态遍历，def-use 追踪求首次引用最短路线
 │   ├── weight.js          # 选项正整数权重的统一校验（保存 / 导入 / 推演共用）
 │   ├── fingerprint.js     # 不依赖数组顺序的问题稳定指纹
 │   ├── baseline.js        # 基线快照构建与新增/已修复/仍存在/详情变化对比
@@ -391,6 +409,7 @@ npm start
 │   ├── foreshadow.js      # 伏笔回收路线校验（违规 / 通过 / 铺垫不可达 / 无结局 / 截断）与 API 自检（node test/foreshadow.js）
 │   ├── pacing.js          # 节奏校验（超限 / 通过 / 清零 / 环上累计 / 截断）与 API 自检（node test/pacing.js）
 │   ├── strategy.js        # 结局保证到达（可保证 / 死局 / 循环 / 不可达 / 截断 / 参数校验）与 API 自检（node test/strategy.js）
+│   ├── assignaudit.js     # 变量赋值消费审计（消费 / 未消费 / 未执行 / 截断未知 / 最短引用路线）与 API 自检（node test/assignaudit.js）
 │   └── healthcheck.js     # 健康检查探针回归测试（node test/healthcheck.js）
 ├── Dockerfile
 └── docker-compose.yml
@@ -399,7 +418,7 @@ npm start
 自检：
 
 ```bash
-npm test          # 依次运行 smoke.js、baseline.js、pathquery.js、probability.js、forcedchoice.js、coverage.js、replay.js、foreshadow.js、pacing.js、strategy.js 与 healthcheck.js
+npm test          # 依次运行 smoke.js、baseline.js、pathquery.js、probability.js、forcedchoice.js、coverage.js、replay.js、foreshadow.js、pacing.js、strategy.js、assignaudit.js 与 healthcheck.js
 ```
 
 ## 技术栈

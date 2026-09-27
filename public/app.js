@@ -39,6 +39,8 @@ const state = {
   stgResult: null,        // 最近一次结局保证到达求解结果
   stgStale: false,        // 求解之后剧情或求解设置又被修改过
   _stgSig: null,          // 策略面板场景签名（避免每次编辑都重建下拉框与勾选列表）
+  aaResult: null,         // 最近一次变量赋值消费审计结果
+  aaStale: false,         // 审计之后剧情又被修改过
   dirty: false,
   saving: false,
 };
@@ -116,6 +118,8 @@ async function openStory(id) {
   state.stgResult = null;
   state.stgStale = false;
   state._stgSig = null;
+  state.aaResult = null;
+  state.aaStale = false;
   $('storySelect').value = id;
   renderAll();
   await runAnalysis(false);
@@ -197,6 +201,8 @@ async function deleteStory() {
   state.stgResult = null;
   state.stgStale = false;
   state._stgSig = null;
+  state.aaResult = null;
+  state.aaStale = false;
   const next = await loadList();
   if (next) await openStory(next);
   else { renderAll(); toast('已删除'); }
@@ -247,6 +253,7 @@ function renderAll() {
   renderForeshadowPanel();
   renderPacingPanel();
   renderStrategyPanel();
+  renderAssignAuditPanel();
   renderDetail(null);
 }
 
@@ -569,6 +576,7 @@ function markDirty(rerender) {
   markForeshadowStale();
   markPacingStale();
   markStrategyStale();
+  markAssignAuditStale();
   renderSaveStatus();
   if (rerender) rerender();
   else renderAnalysis();
@@ -579,6 +587,7 @@ function markDirty(rerender) {
   renderForeshadowPanel(); // 内部有签名缓存，场景未变时仅刷新过期提示与结果
   renderPacingPanel(); // 内部有签名缓存，场景未变时仅刷新过期提示与结果
   renderStrategyPanel(); // 内部有签名缓存，场景未变时仅刷新过期提示与结果
+  renderAssignAuditPanel(); // 仅刷新过期提示与已展示的结果，不重新审计
   clearTimeout(reanalyzeTimer);
   reanalyzeTimer = setTimeout(() => runAnalysis(true), 500);
 }
@@ -2902,6 +2911,201 @@ function renderStrategyResult() {
   }
 }
 
+/* ============================================================
+ * 变量赋值消费审计
+ * ============================================================ */
+function markAssignAuditStale() {
+  if (!state.aaResult) return;
+  state.aaStale = true;
+  const el = $('aaStale');
+  if (el) el.hidden = false;
+}
+
+function renderAssignAuditPanel() {
+  const card = $('aaCard');
+  if (!state.story) { card.hidden = true; return; }
+  card.hidden = false;
+  $('aaStale').hidden = !state.aaStale;
+  renderAssignAuditResult();
+}
+
+async function runAssignAudit() {
+  if (!state.story) return;
+  try {
+    // 对编辑中的未保存草稿直接审计（不落盘）
+    state.aaResult = await api('POST', '/api/assign-audit', { story: state.story });
+    state.aaStale = false;
+    renderAssignAuditPanel();
+  } catch (e) {
+    toast(`变量赋值消费审计失败：${e.message}`);
+  }
+}
+
+const AA_STATUS_META = {
+  consumed: { cls: 'badge-ok', label: '已消费' },
+  unconsumed: { cls: 'badge-err', label: '未消费' },
+  unknown: { cls: 'badge-warn', label: '未知' },
+  unreachable: { cls: 'badge-muted', label: '未执行' },
+};
+
+const AA_VERDICT_META = {
+  ok: { cls: 'pq-ok', icon: '✓' },
+  truncated: { cls: 'pq-warn', icon: '⚠' },
+  'start-blocked': { cls: 'pq-err', icon: '✗' },
+};
+
+/** 首次引用路线视图：场景 / 选项交替（带每步变量状态），末尾标注引用发生的位置 */
+function buildAssignAuditPathView(ref, knownVars) {
+  const wrap = document.createElement('div');
+  wrap.className = 'path-view';
+  (ref.path || []).forEach((node, i) => {
+    if (node.kind === 'scene') {
+      const div = document.createElement('div');
+      div.className = 'path-node scene';
+      const badge = i === 0 ? '<span class="badge badge-ok">起点</span>' : '';
+      div.innerHTML = `<span class="pn-title"></span><span class="pn-id"></span>${badge}`;
+      div.querySelector('.pn-title').textContent = node.title || node.sceneId;
+      div.querySelector('.pn-id').textContent = node.sceneId;
+      div.insertAdjacentHTML('beforeend', stateChips(node.state, knownVars || []));
+      wrap.appendChild(div);
+    } else {
+      const div = document.createElement('div');
+      div.className = 'path-edge';
+      div.appendChild(document.createTextNode(
+        `选项 ${node.optionIndex + 1}「${node.optionText || ''}」 → ${node.target}`));
+      if (node.optionUid) {
+        const uid = document.createElement('code');
+        uid.className = 'cov-uid';
+        uid.textContent = node.optionUid;
+        div.appendChild(uid);
+      }
+      if (node.stateAfter) {
+        div.insertAdjacentHTML('beforeend', stateChips(node.stateAfter, knownVars || []));
+      }
+      wrap.appendChild(div);
+    }
+  });
+  // 末尾：首次引用发生的位置与当时的变量状态
+  const reader = ref.reader || {};
+  const div = document.createElement('div');
+  div.className = 'path-node aa-ref-node';
+  const head = document.createElement('div');
+  head.className = 'aa-ref-head';
+  const badge = document.createElement('span');
+  badge.className = 'badge badge-ok';
+  badge.textContent = '首次引用';
+  const text = document.createElement('span');
+  text.textContent = reader.kind === 'option-condition'
+    ? `在场景「${reader.sceneId}」选项 ${reader.optionIndex + 1} 的条件`
+      + `（${reader.condition || ''}）中引用变量 ${ref.variable}`
+    : `进入场景「${reader.sceneId}」时，其前置条件`
+      + `（${reader.condition || ''}）引用变量 ${ref.variable}`;
+  head.append(badge, text);
+  div.appendChild(head);
+  if (ref.stateAtRead) {
+    div.insertAdjacentHTML('beforeend', stateChips(ref.stateAtRead, knownVars || []));
+  }
+  wrap.appendChild(div);
+  return wrap;
+}
+
+function renderAssignAuditResult() {
+  const box = $('aaResult');
+  box.innerHTML = '';
+  const r = state.aaResult;
+  if (!r || !state.story) return;
+
+  const meta = AA_VERDICT_META[r.status] || { cls: 'pq-warn', icon: '⚠' };
+  const banner = document.createElement('div');
+  banner.className = `pq-banner ${meta.cls}`;
+  banner.textContent = `${meta.icon} ${r.message}`;
+  box.appendChild(banner);
+
+  if (r.conditionErrors && r.conditionErrors.length) {
+    const note = document.createElement('div');
+    note.className = 'pq-note';
+    note.textContent = `剧情中存在 ${r.conditionErrors.length} 处条件语法错误，本次审计按恒真处理（详见一致性分析）。`;
+    box.appendChild(note);
+  }
+
+  if (r.startBlocked) return;
+
+  const s = r.summary || {};
+  const stats = document.createElement('div');
+  stats.className = 'stats';
+  stats.innerHTML = `
+    <div class="stat ${s.unconsumed ? 'stat-bad' : 'stat-ok'}"><span>未消费赋值</span><b>${s.unconsumed ?? 0}</b></div>
+    <div class="stat"><span>赋值位置总数</span><b>${s.total ?? 0}</b></div>
+    <div class="stat"><span>可达赋值</span><b>${s.reachable ?? 0}</b></div>
+    <div class="stat stat-ok"><span>已消费</span><b>${s.consumed ?? 0}</b></div>
+    ${s.unknown ? `<div class="stat stat-warn"><span>未知（截断）</span><b>${s.unknown}</b></div>` : ''}
+    <div class="stat"><span>未执行（不可达）</span><b>${s.unreachable ?? 0}</b></div>
+    <div class="stat"><span>枚举具体状态</span><b>${r.counts.states}</b></div>
+    <div class="stat"><span>布尔变量</span><b>${r.counts.variables}</b></div>
+  `;
+  box.appendChild(stats);
+
+  if (!r.assignments || !r.assignments.length) {
+    const note = document.createElement('div');
+    note.className = 'pq-note';
+    note.textContent = '剧情中没有任何场景进入赋值或选项赋值，无从审计。';
+    box.appendChild(note);
+    return;
+  }
+
+  const label = document.createElement('div');
+  label.className = 'cov-section-label';
+  label.textContent = `逐赋值位置结果（${r.assignments.length} 处；已消费项可展开查看首次引用的最短可走路线）`;
+  box.appendChild(label);
+
+  const list = document.createElement('div');
+  list.className = 'aa-list';
+  for (const a of r.assignments) {
+    const m = AA_STATUS_META[a.status] || AA_STATUS_META.unknown;
+    const head = document.createElement('div');
+    head.className = 'aa-item-head';
+    const badge = document.createElement('span');
+    badge.className = `badge ${m.cls}`;
+    badge.textContent = m.label;
+    const pos = document.createElement('span');
+    pos.className = 'aa-pos';
+    pos.textContent = a.label;
+    const val = document.createElement('code');
+    val.className = 'aa-var';
+    val.textContent = `${a.variable} = ${a.value}`;
+    head.append(badge, pos, val);
+
+    if (a.status === 'consumed' && a.reference) {
+      const det = document.createElement('details');
+      det.className = 'aa-item';
+      const sum = document.createElement('summary');
+      sum.appendChild(head);
+      const refInfo = document.createElement('span');
+      refInfo.className = 'aa-ref-summary';
+      refInfo.textContent = `首次引用 ${a.reference.depth} 步 ▸`;
+      sum.appendChild(refInfo);
+      det.appendChild(sum);
+      const body = document.createElement('div');
+      body.className = 'aa-item-body';
+      body.appendChild(buildAssignAuditPathView(a.reference, r.knownVars));
+      det.appendChild(body);
+      list.appendChild(det);
+    } else {
+      const row = document.createElement('div');
+      row.className = 'aa-item aa-item-static';
+      row.appendChild(head);
+      if (a.reason) {
+        const reason = document.createElement('div');
+        reason.className = 'aa-reason';
+        reason.textContent = a.reason;
+        row.appendChild(reason);
+      }
+      list.appendChild(row);
+    }
+  }
+  box.appendChild(list);
+}
+
 function fmtTime(iso) {
   if (!iso) return '';
   const d = new Date(iso);
@@ -3330,6 +3534,7 @@ function bindGlobalEvents() {
     state.strategy.targetScene = e.target.value;
     markStrategyStale();
   });
+  $('btnRunAssignAudit').addEventListener('click', runAssignAudit);
   $('btnCloseDetail').addEventListener('click', () => $('detailPanel').hidden = true);
   $('btnSaveBaseline').addEventListener('click', saveBaseline);
   $('btnRunCompare').addEventListener('click', runCompare);

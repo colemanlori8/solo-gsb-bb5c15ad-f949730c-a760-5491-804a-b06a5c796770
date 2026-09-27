@@ -12,6 +12,7 @@ const { analyzeForcedChoices, bypassForced } = require('./src/forcedchoice');
 const { checkForeshadow } = require('./src/foreshadow');
 const { checkPacing } = require('./src/pacing');
 const { solveStrategy } = require('./src/strategy');
+const { auditAssignments } = require('./src/assignaudit');
 const { buildBaseline, compareWithBaseline } = require('./src/baseline');
 
 const app = express();
@@ -246,6 +247,25 @@ app.post('/api/stories/:id/strategy', wrap((req, res) => {
   const body = req.body || {};
   const query = body.query !== undefined ? body.query : body;
   res.json(solveStrategy(story, query));
+}));
+
+// ---- 变量赋值消费审计：对请求体中的草稿剧情直接审计（不落盘），供编辑页面板实时使用 ----
+// 请求体即剧情（或 { story: <剧情> }）。沿「场景 + 每变量最后赋值来源」状态图追踪每处
+// 场景进入赋值 / 选项赋值写入的变量值，在再次被赋值或路线结束前是否被后续条件
+// （选项条件 / 场景前置条件）引用；已消费项附到首次引用的最短可走路线；含环必然终止，
+// 状态上限截断时未知项标记为 unknown，不判为未消费。剧情缺少有效起点返回 400。
+app.post('/api/assign-audit', wrap((req, res) => {
+  const body = req.body || {};
+  const story = body.story !== undefined ? body.story : body;
+  const opts = Number.isInteger(body.maxStates) && body.maxStates > 0 ? { maxStates: body.maxStates } : {};
+  res.json(auditAssignments(story, opts));
+}));
+
+// ---- 对已保存的剧情做变量赋值消费审计 ----
+app.get('/api/stories/:id/assign-audit', wrap((req, res) => {
+  const story = storage.getStory(req.params.id);
+  if (!story) return res.status(404).json({ error: '剧情不存在' });
+  res.json(auditAssignments(story));
 }));
 
 // ---- 分析基线：把当前（通常是编辑中的）分析结果保存为基线，随剧情 JSON 持久化 ----

@@ -39,6 +39,8 @@ const state = {
   stgResult: null,        // 最近一次结局保证到达求解结果
   stgStale: false,        // 求解之后剧情或求解设置又被修改过
   _stgSig: null,          // 策略面板场景签名（避免每次编辑都重建下拉框与勾选列表）
+  vacResult: null,        // 最近一次变量赋值消费审计结果
+  vacStale: false,        // 审计之后剧情又被编辑过
   dirty: false,
   saving: false,
 };
@@ -116,6 +118,8 @@ async function openStory(id) {
   state.stgResult = null;
   state.stgStale = false;
   state._stgSig = null;
+  state.vacResult = null;
+  state.vacStale = false;
   $('storySelect').value = id;
   renderAll();
   await runAnalysis(false);
@@ -197,6 +201,8 @@ async function deleteStory() {
   state.stgResult = null;
   state.stgStale = false;
   state._stgSig = null;
+  state.vacResult = null;
+  state.vacStale = false;
   const next = await loadList();
   if (next) await openStory(next);
   else { renderAll(); toast('已删除'); }
@@ -247,6 +253,7 @@ function renderAll() {
   renderForeshadowPanel();
   renderPacingPanel();
   renderStrategyPanel();
+  renderAssignmentAuditPanel();
   renderDetail(null);
 }
 
@@ -569,6 +576,7 @@ function markDirty(rerender) {
   markForeshadowStale();
   markPacingStale();
   markStrategyStale();
+  markAssignmentAuditStale();
   renderSaveStatus();
   if (rerender) rerender();
   else renderAnalysis();
@@ -579,6 +587,7 @@ function markDirty(rerender) {
   renderForeshadowPanel(); // 内部有签名缓存，场景未变时仅刷新过期提示与结果
   renderPacingPanel(); // 内部有签名缓存，场景未变时仅刷新过期提示与结果
   renderStrategyPanel(); // 内部有签名缓存，场景未变时仅刷新过期提示与结果
+  renderAssignmentAuditPanel(); // 仅刷新过期提示与已展示的结果，不重新审计
   clearTimeout(reanalyzeTimer);
   reanalyzeTimer = setTimeout(() => runAnalysis(true), 500);
 }
@@ -3277,6 +3286,247 @@ function renderExprNode(node) {
 }
 
 /* ============================================================
+ * 变量赋值消费审计
+ * ============================================================ */
+function markAssignmentAuditStale() {
+  if (!state.vacResult) return;
+  state.vacStale = true;
+  const el = $('vacStale');
+  if (el) el.hidden = false;
+}
+
+function renderAssignmentAuditPanel() {
+  const card = $('vacCard');
+  if (!state.story) { card.hidden = true; return; }
+  card.hidden = false;
+  $('vacStale').hidden = !state.vacStale;
+  renderAssignmentAuditResult();
+}
+
+async function runAssignmentAudit() {
+  if (!state.story) return;
+  try {
+    // 对编辑中的未保存草稿直接审计（不落盘）
+    state.vacResult = await api('POST', '/api/assignment-audit', state.story);
+    state.vacStale = false;
+    renderAssignmentAuditPanel();
+  } catch (e) {
+    toast(`赋值消费审计失败：${e.message}`);
+  }
+}
+
+const VAC_STATUS_META = {
+  consumed: { cls: 'pq-ok', icon: '✓', label: '已消费' },
+  unconsumed: { cls: 'pq-err', icon: '✗', label: '未消费' },
+  unknown: { cls: 'pq-warn', icon: '⚠', label: '未知' },
+  excluded: { cls: 'pq-muted', icon: '∅', label: '已排除' },
+};
+
+const VAC_REFERENCE_LABEL = {
+  optionCondition: '选项显示条件',
+  targetPrecondition: '目标场景前置条件',
+  scenePrecondition: '场景前置条件',
+};
+
+const VAC_EXCLUDED_LABEL = {
+  sceneUnreachable: '所在场景不可达',
+  optionInUnreachableScene: '所在选项位于不可达场景',
+  orphanOption: '选项悬空跳转（无目标或目标不存在）',
+  optionNeverEnabled: '选项条件在所有可达状态下都不成立',
+};
+
+/** 赋值位置徽标：变量 = 值 */
+function vacAssignBadge(item) {
+  return `<code class="vac-var">${item.variable}</code>
+    <span class="badge ${item.value ? 'badge-ok' : 'badge-muted'}">← ${item.value ? 'true' : 'false'}</span>`;
+}
+
+/** 审计路线视图：场景节点带进入赋值标注与引用点，选项边带本选项赋值标注 */
+function buildVacPathView(path, knownVars) {
+  const wrap = document.createElement('div');
+  wrap.className = 'path-view';
+  (path || []).forEach((node) => {
+    if (node.kind === 'scene') {
+      const div = document.createElement('div');
+      const cls = ['path-node', 'scene'];
+      if (node.isStart) cls.push('start');
+      if (node.blockedEntry) cls.push('blocked');
+      div.className = cls.join(' ');
+      let badge = node.isStart ? '<span class="badge badge-ok">起点</span>' : '';
+      if (node.blockedEntry) badge += '<span class="badge badge-err">前置条件不成立 · 路线在此结束</span>';
+      if (node.notExpanded) badge += '<span class="badge badge-warn">截断：未继续展开</span>';
+      div.innerHTML = `<span class="pn-title"></span><span class="pn-id"></span>${badge}`;
+      div.querySelector('.pn-title').textContent = node.title || node.sceneId;
+      div.querySelector('.pn-id').textContent = node.sceneId;
+      if (node.writes && node.writes.length) {
+        div.insertAdjacentHTML('beforeend',
+          `<div class="vac-writes">进入赋值：${node.writes.map((p) => `<code class="vac-pos">${p}</code>`).join(' ')}</div>`);
+      }
+      div.insertAdjacentHTML('beforeend', stateChips(node.state, knownVars || []));
+      if (node.reference) {
+        const ref = document.createElement('div');
+        ref.className = 'vac-reference';
+        const where = node.reference.type === 'optionCondition'
+          ? `选项 ${node.reference.optionIndex + 1}「${node.reference.optionText || ''}」的显示条件`
+          : (node.reference.type === 'targetPrecondition' ? `进入本场景时的前置条件` : '场景前置条件');
+        ref.innerHTML = `<span class="badge badge-req">首次引用</span>
+          <span class="vac-ref-where"></span>
+          <code class="vac-ref-raw"></code>
+          <span class="vac-ref-var"></span>`;
+        ref.querySelector('.vac-ref-where').textContent = where;
+        ref.querySelector('.vac-ref-raw').textContent = node.reference.raw ? node.reference.raw : '（恒真）';
+        ref.querySelector('.vac-ref-var').textContent = `读到 ${node.reference.variable}`;
+        div.appendChild(ref);
+      }
+      wrap.appendChild(div);
+    } else {
+      const div = document.createElement('div');
+      div.className = 'path-edge' + (node.blockedEntry ? ' broken' : '');
+      div.appendChild(document.createTextNode(
+        `选项 ${node.optionIndex + 1}「${node.optionText || ''}」 → ${node.target}`));
+      if (node.optionUid) {
+        const uid = document.createElement('code');
+        uid.className = 'cov-uid';
+        uid.textContent = node.optionUid;
+        div.appendChild(uid);
+      }
+      if (node.writes && node.writes.length) {
+        div.insertAdjacentHTML('beforeend',
+          `<div class="vac-writes">选项赋值：${node.writes.map((p) => `<code class="vac-pos">${p}</code>`).join(' ')}</div>`);
+      }
+      if (node.stateAfter) div.insertAdjacentHTML('beforeend', stateChips(node.stateAfter, knownVars || []));
+      wrap.appendChild(div);
+    }
+  });
+  return wrap;
+}
+
+/** 单个赋值位置行（可展开首次引用路线） */
+function buildVacItem(item, knownVars) {
+  const meta = VAC_STATUS_META[item.status] || VAC_STATUS_META.unknown;
+  const li = document.createElement('li');
+  li.className = `vac-item vac-${item.status}`;
+
+  const head = document.createElement('div');
+  head.className = 'vac-item-head';
+  head.innerHTML = `
+    <span class="badge ${item.status === 'consumed' ? 'badge-ok'
+      : item.status === 'unconsumed' ? 'badge-err'
+      : item.status === 'unknown' ? 'badge-warn' : 'badge-muted'}">${meta.icon} ${meta.label}</span>
+    <span class="vac-assign"></span>
+    <span class="vac-note"></span>
+    <button class="btn btn-small vac-toggle" hidden>查看首次引用路线</button>
+  `;
+  head.querySelector('.vac-assign').innerHTML = vacAssignBadge(item);
+  const note = head.querySelector('.vac-note');
+  if (item.status === 'excluded') {
+    note.textContent = VAC_EXCLUDED_LABEL[item.excludedReason] || item.excludedReason || '';
+  } else if (item.status === 'consumed' && item.witness) {
+    note.textContent = `${VAC_REFERENCE_LABEL[item.witness.reference.type] || '条件'} 首次引用 · ${item.witness.depth} 步`;
+  } else if (item.status === 'unconsumed') {
+    note.textContent = '再次赋值或路线结束前从未被任何条件引用';
+  } else {
+    note.textContent = '状态上限截断，未探索区域可能存在引用，不能判为未消费';
+  }
+  li.appendChild(head);
+
+  if (item.witness) {
+    const btn = head.querySelector('.vac-toggle');
+    btn.hidden = false;
+    const body = document.createElement('div');
+    body.className = 'vac-item-body';
+    body.hidden = true;
+    const label = document.createElement('div');
+    label.className = 'cov-section-label';
+    label.textContent = `到首次引用的最短可走路线（${item.witness.depth} 步选项链）`;
+    body.appendChild(label);
+    body.appendChild(buildVacPathView(item.witness.path, knownVars));
+    li.appendChild(body);
+    btn.addEventListener('click', () => {
+      body.hidden = !body.hidden;
+      btn.textContent = body.hidden ? '查看首次引用路线' : '收起路线';
+    });
+  }
+  return li;
+}
+
+function renderAssignmentAuditResult() {
+  const box = $('vacResult');
+  box.innerHTML = '';
+  const r = state.vacResult;
+  if (!r || !state.story) return;
+
+  const bannerCls = r.startBlocked || false ? 'pq-err'
+    : r.status === 'complete' ? (r.counts.unconsumed ? 'pq-warn' : 'pq-ok')
+    : 'pq-warn';
+  const banner = document.createElement('div');
+  banner.className = `pq-banner ${bannerCls}`;
+  banner.textContent = `${r.status === 'truncated' ? '⚠' : (bannerCls === 'pq-err' ? '✗' : (r.counts.unconsumed ? '⚠' : '✓'))} ${r.message}`;
+  box.appendChild(banner);
+
+  if (r.conditionErrors && r.conditionErrors.length) {
+    const note = document.createElement('div');
+    note.className = 'pq-note';
+    note.textContent = `剧情中存在 ${r.conditionErrors.length} 处条件语法错误，本次审计按恒真处理（详见一致性分析）。`;
+    box.appendChild(note);
+  }
+
+  if (r.startBlocked) return;
+
+  // 统计
+  const stats = document.createElement('div');
+  stats.className = 'stats';
+  stats.innerHTML = `
+    <div class="stat ${r.counts.unconsumed ? 'stat-bad' : 'stat-ok'}"><span>已消费</span><b>${r.counts.consumed}</b></div>
+    <div class="stat ${r.counts.unconsumed ? 'stat-bad' : ''}"><span>未消费</span><b>${r.counts.unconsumed}</b></div>
+    ${r.truncated ? `<div class="stat stat-warn"><span>未知（截断）</span><b>${r.counts.unknown}</b></div>` : ''}
+    <div class="stat"><span>已排除（不可达位置）</span><b>${r.counts.excluded}</b></div>
+    <div class="stat"><span>枚举具体状态</span><b>${r.counts.states}</b></div>
+    <div class="stat"><span>布尔变量</span><b>${r.counts.variables}</b></div>
+  `;
+  box.appendChild(stats);
+
+  // 分组：按场景列出进入赋值与各选项赋值
+  for (const g of r.groups) {
+    const sceneHasItems = g.assigns.length || g.options.some((o) => o.assigns.length);
+    if (!sceneHasItems) continue;
+    const card = document.createElement('div');
+    card.className = 'vac-group';
+    const head = document.createElement('div');
+    head.className = 'vac-group-head';
+    head.innerHTML = `<span class="vac-group-title"></span><code class="vac-group-id"></code>`;
+    head.querySelector('.vac-group-title').textContent = g.title || g.sceneId;
+    head.querySelector('.vac-group-id').textContent = g.sceneId;
+    card.appendChild(head);
+
+    if (g.assigns.length) {
+      const sub = document.createElement('div');
+      sub.className = 'vac-sub';
+      sub.insertAdjacentHTML('beforeend', '<div class="vac-sub-label">进入时赋值</div>');
+      const ul = document.createElement('ul');
+      ul.className = 'vac-items';
+      g.assigns.forEach((p) => ul.appendChild(buildVacItem(p, r.knownVars)));
+      sub.appendChild(ul);
+      card.appendChild(sub);
+    }
+    g.options.forEach((o) => {
+      if (!o.assigns.length) return;
+      const sub = document.createElement('div');
+      sub.className = 'vac-sub';
+      sub.insertAdjacentHTML('beforeend',
+        `<div class="vac-sub-label">选项 ${o.optionIndex + 1}「<span class="vac-opt-text"></span>」 → <code>${o.target || '（悬空）'}</code></div>`);
+      sub.querySelector('.vac-opt-text').textContent = o.text || '';
+      const ul = document.createElement('ul');
+      ul.className = 'vac-items';
+      o.assigns.forEach((p) => ul.appendChild(buildVacItem(p, r.knownVars)));
+      sub.appendChild(ul);
+      card.appendChild(sub);
+    });
+    box.appendChild(card);
+  }
+}
+
+/* ============================================================
  * 全局事件 & 启动
  * ============================================================ */
 function bindGlobalEvents() {
@@ -3326,6 +3576,7 @@ function bindGlobalEvents() {
     markPacingStale();
   });
   $('btnRunStrategy').addEventListener('click', runStrategy);
+  $('btnRunVac').addEventListener('click', runAssignmentAudit);
   $('stgTarget').addEventListener('change', (e) => {
     state.strategy.targetScene = e.target.value;
     markStrategyStale();

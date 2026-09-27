@@ -240,6 +240,16 @@
         <div id="stgResult" class="stg-result"></div>
       </section>
 
+      <section id="vacCard" class="card vac-card" hidden>
+        <div class="card-head">
+          <h2>变量赋值消费审计</h2>
+          <button id="btnRunVac" class="btn btn-small btn-primary">运行审计</button>
+        </div>
+        <div class="vac-hint">沿「场景 + 完整变量状态」图追踪每个可达的<b>场景进入赋值</b>与<b>选项赋值</b>：其写下的变量值是否在<b>再次被赋值</b>或<b>路线结束</b>前被后续条件引用过？选项显示条件先于本选项赋值求值；目标场景进入赋值先于其前置条件（入口受阻也算一次引用）；同一赋值在任一可达状态下被引用一次即算已消费。已消费项给出到首次引用的最短可走路线；状态上限截断时未确证项标为“未知”，不误判为未消费。</div>
+        <div id="vacStale" class="diff-stale" hidden>⚠ 剧情已修改，以下结果可能过期，请重新「运行审计」</div>
+        <div id="vacResult" class="vac-result"></div>
+      </section>
+
       <section id="detailPanel" class="card detail-card" hidden>
         <div class="card-head">
           <h2 id="detailTitle">问题详情</h2>

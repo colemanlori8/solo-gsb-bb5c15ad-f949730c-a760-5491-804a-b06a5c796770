@@ -577,6 +577,43 @@ code {
 .stg-rec-text { font-weight: 600; }
 .stg-rec-target { color: var(--muted); }
 
+/* ---------- 变量赋值消费审计 ---------- */
+.vac-card { max-height: 56%; display: flex; flex-direction: column; }
+.vac-card .vac-result { overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+.vac-hint { font-size: 11.5px; color: var(--muted); line-height: 1.5; margin-bottom: 8px; }
+.vac-result .path-node .badge,
+.vac-result .path-edge .badge { margin-left: 4px; }
+.vac-group { border: 1px solid var(--border); border-radius: 8px; background: #fff; padding: 7px 10px; }
+.vac-group-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+.vac-group-title { font-weight: 700; font-size: 13px; }
+.vac-group-id { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--muted); }
+.vac-sub { margin-top: 4px; }
+.vac-sub-label { font-size: 11.5px; font-weight: 700; color: var(--muted); margin: 5px 0 3px; }
+.vac-items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.vac-item { border-radius: 7px; border: 1px solid var(--border); background: #fbfcfe; }
+.vac-item.vac-consumed { border-left: 3px solid var(--ok); }
+.vac-item.vac-unconsumed { border-left: 3px solid var(--danger); background: var(--danger-bg); }
+.vac-item.vac-unknown { border-left: 3px solid var(--warning); background: var(--warning-bg); }
+.vac-item.vac-excluded { opacity: .72; }
+.vac-item-head { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; padding: 5px 8px; font-size: 12.5px; }
+.vac-assign { display: inline-flex; align-items: center; gap: 4px; }
+.vac-var { font-family: ui-monospace, Menlo, monospace; font-weight: 700; }
+.vac-pos {
+  font-family: ui-monospace, Menlo, monospace; font-size: 10.5px;
+  background: #eef2f9; border-radius: 4px; padding: 0 4px; margin-right: 2px;
+}
+.vac-note { color: var(--muted); font-size: 11.5px; flex: 1; min-width: 140px; }
+.vac-toggle { margin-left: auto; }
+.vac-item-body { padding: 4px 8px 8px; }
+.vac-writes { font-size: 11px; color: var(--muted); margin-top: 3px; }
+.vac-reference {
+  margin-top: 5px; font-size: 12px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  background: var(--ok-bg); border-radius: 6px; padding: 4px 7px;
+}
+.vac-ref-where { font-weight: 600; }
+.vac-ref-raw { font-family: ui-monospace, Menlo, monospace; font-size: 11px; background: #fff; border-radius: 4px; padding: 0 5px; }
+.vac-ref-var { color: var(--ok); font-weight: 700; }
+
 /* ---------- Toast ---------- */
 .toast {
   position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);

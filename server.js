@@ -12,6 +12,7 @@ const { analyzeForcedChoices, bypassForced } = require('./src/forcedchoice');
 const { checkForeshadow } = require('./src/foreshadow');
 const { checkPacing } = require('./src/pacing');
 const { solveStrategy } = require('./src/strategy');
+const { auditAssignments } = require('./src/assignment-audit');
 const { buildBaseline, compareWithBaseline } = require('./src/baseline');
 
 const app = express();
@@ -246,6 +247,27 @@ app.post('/api/stories/:id/strategy', wrap((req, res) => {
   const body = req.body || {};
   const query = body.query !== undefined ? body.query : body;
   res.json(solveStrategy(story, query));
+}));
+
+// ---- 变量赋值消费审计：对请求体中的草稿剧情直接审计（不落盘），供编辑页面板实时使用 ----
+// 请求体即剧情（或 { story: <剧情> }）。在「场景 + 变量状态」图上为每个变量附带最近
+// 赋值位置溯源（状态键 = 场景 + 变量位图 + 溯源向量），追踪每个可达的场景进入赋值 /
+// 选项赋值写下的值，是否在再次被赋值或路线结束前被后续条件引用：选项条件先于本选项
+// 赋值，目标场景进入赋值先于其前置条件（入口受阻也算一次引用）；同一位置在任一可达
+// 状态下被引用一次即算已消费，并给出到首次引用的最短可走路线。状态上限截断时未确证
+// 消费的位置一律标为未知，不误判为未消费。
+app.post('/api/assignment-audit', wrap((req, res) => {
+  const body = req.body || {};
+  const story = body.story !== undefined ? body.story : body;
+  const opts = Number.isInteger(body.maxStates) && body.maxStates > 0 ? { maxStates: body.maxStates } : {};
+  res.json(auditAssignments(story, opts));
+}));
+
+// ---- 对已保存的剧情做变量赋值消费审计 ----
+app.get('/api/stories/:id/assignment-audit', wrap((req, res) => {
+  const story = storage.getStory(req.params.id);
+  if (!story) return res.status(404).json({ error: '剧情不存在' });
+  res.json(auditAssignments(story));
 }));
 
 // ---- 分析基线：把当前（通常是编辑中的）分析结果保存为基线，随剧情 JSON 持久化 ----
